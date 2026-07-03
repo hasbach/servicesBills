@@ -1,0 +1,12 @@
+Flask
+Flask-SQLAlchemy
+Flask-Cors
+APScheduler
+python-dateutil
+Flask-Bcrypt
+Flask-JWT-Extended
+Werkzeug
+gunicorn
+waitress
+requests
+pywebpush
