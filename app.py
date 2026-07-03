@@ -2465,13 +2465,46 @@ def apply_system_update():
     platform = settings.platform or 'pythonanywhere'
 
     logs = []
-    # Step 1: Git Pull
+    # Step 1: Git Pull / Sync
     try:
         import subprocess
         pull_res = subprocess.run(["git", "pull", "origin", "main"], cwd=repo_dir, capture_output=True, text=True, timeout=30)
-        logs.append(f"Git pull: {pull_res.stdout or pull_res.stderr or 'OK'}")
+        if pull_res.returncode != 0 or "not a git repository" in (pull_res.stderr or "").lower():
+            logs.append("Git repo uninitialized or detached. Self-healing connection...")
+            subprocess.run(["git", "init"], cwd=repo_dir, capture_output=True)
+            subprocess.run(["git", "remote", "remove", "origin"], cwd=repo_dir, capture_output=True)
+            subprocess.run(["git", "remote", "add", "origin", "https://github.com/hasbach/servicesBills.git"], cwd=repo_dir, capture_output=True)
+            subprocess.run(["git", "fetch", "origin", "main"], cwd=repo_dir, capture_output=True, timeout=30)
+            reset_res = subprocess.run(["git", "reset", "--hard", "origin/main"], cwd=repo_dir, capture_output=True, text=True)
+            logs.append(f"Git auto-heal & sync: {reset_res.stdout or reset_res.stderr or 'Successfully synced with GitHub'}")
+        else:
+            logs.append(f"Git pull: {pull_res.stdout or pull_res.stderr or 'OK'}")
     except Exception as e:
-        logs.append(f"Git pull (local dev mode): Verified codebase integrity.")
+        try:
+            import urllib.request, zipfile, shutil
+            zip_url = "https://github.com/hasbach/servicesBills/archive/refs/heads/main.zip"
+            zip_path = os.path.join(repo_dir, "update_temp.zip")
+            urllib.request.urlretrieve(zip_url, zip_path)
+            with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+                extract_dir = os.path.join(repo_dir, "update_extracted")
+                zip_ref.extractall(extract_dir)
+                source_dir = os.path.join(extract_dir, "servicesBills-main")
+                for root, dirs, files in os.walk(source_dir):
+                    rel_path = os.path.relpath(root, source_dir)
+                    if any(ignored in rel_path for ignored in ['instance', 'uploads', '__pycache__', '.git']):
+                        continue
+                    dest_dir = repo_dir if rel_path == '.' else os.path.join(repo_dir, rel_path)
+                    os.makedirs(dest_dir, exist_ok=True)
+                    for file in files:
+                        if file in ['database.db', 'vapid_keys.env', '.env']:
+                            continue
+                        shutil.copy2(os.path.join(root, file), os.path.join(dest_dir, file))
+                shutil.rmtree(extract_dir, ignore_errors=True)
+            if os.path.exists(zip_path):
+                os.remove(zip_path)
+            logs.append("Updated code directly from GitHub archive ZIP (zero data loss).")
+        except Exception as zip_e:
+            logs.append(f"Update error: {str(zip_e)}")
 
     # Step 2: Database Migration Upgrade
     try:
