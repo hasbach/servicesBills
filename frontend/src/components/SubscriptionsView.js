@@ -436,6 +436,7 @@ const SubscriptionsView = ({
                 sector: editingCustomer.sector,
                 subscription_plan_id: editingCustomer.subscription_plan_id,
                 discount: editingCustomer.discount,
+                balance: editingCustomer.balance !== undefined ? editingCustomer.balance : 0,
                 reseller_id: editingCustomer.reseller_id || ""
             });
 
@@ -952,7 +953,8 @@ const SubscriptionsView = ({
                                 {subscriptionPlans.map(plan => (<MenuItem key={plan.id} value={plan.id}>{plan.name} - ${plan.price}</MenuItem>))}
                             </TextField>
                         </Grid>
-                        <Grid item xs={12} md={6}><TextField fullWidth type="number" label="Discount" value={editingCustomer?.discount || 0} onChange={(e) => setEditingCustomer({ ...editingCustomer, discount: parseFloat(e.target.value) || 0 })} /></Grid>
+                        <Grid item xs={12} md={6}><TextField fullWidth type="number" label="Discount ($)" value={editingCustomer?.discount || 0} onChange={(e) => setEditingCustomer({ ...editingCustomer, discount: parseFloat(e.target.value) || 0 })} /></Grid>
+                        <Grid item xs={12} md={6}><TextField fullWidth type="number" label="Account Balance ($)" value={editingCustomer?.balance !== undefined ? editingCustomer.balance : 0} helperText="Negative value = Customer owes money. 0 = Paid." onChange={(e) => setEditingCustomer({ ...editingCustomer, balance: parseFloat(e.target.value) || 0 })} /></Grid>
                     </Grid>
                 </DialogContent>
                 <DialogActions>

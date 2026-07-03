@@ -1213,38 +1213,6 @@ def delete_customer(customer_id):
         return jsonify({'error': str(e)}), 500
 
 
-@app.route('/api/customers/<int:customer_id>/reconcile-balance', methods=['POST'])
-@jwt_required()
-def reconcile_single_customer_balance(customer_id):
-    try:
-        customer = db.session.get(Customer, customer_id)
-        if not customer:
-            return jsonify({'message': 'Customer not found!'}), 404
-        
-        unpaid_total = db.session.query(func.coalesce(func.sum(Payment.amount), 0.0)).filter_by(customer_id=customer.id, paid=False).scalar()
-        customer.balance = -float(unpaid_total)
-        db.session.commit()
-        return jsonify({'message': 'Customer balance reconciled successfully!', 'balance': float(customer.balance)}), 200
-    except Exception as e:
-        db.session.rollback()
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/customers/reconcile-all-balances', methods=['POST'])
-@jwt_required()
-def reconcile_all_customers_balances():
-    try:
-        customers = Customer.query.all()
-        count = 0
-        for c in customers:
-            unpaid_total = db.session.query(func.coalesce(func.sum(Payment.amount), 0.0)).filter_by(customer_id=c.id, paid=False).scalar()
-            c.balance = -float(unpaid_total)
-            count += 1
-        db.session.commit()
-        return jsonify({'message': f'Successfully reconciled balances for {count} customers!'}), 200
-    except Exception as e:
-        db.session.rollback()
-        return jsonify({'error': str(e)}), 500
 
 
 
