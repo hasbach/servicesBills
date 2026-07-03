@@ -2506,6 +2506,17 @@ def apply_system_update():
         except Exception as zip_e:
             logs.append(f"Update error: {str(zip_e)}")
 
+    # Step 1.5: Sync frontend/build to root build/ so PythonAnywhere static file settings always get updated
+    try:
+        fb_dir = os.path.join(repo_dir, 'frontend', 'build')
+        rb_dir = os.path.join(repo_dir, 'build')
+        if os.path.exists(fb_dir):
+            import shutil
+            shutil.copytree(fb_dir, rb_dir, dirs_exist_ok=True)
+            logs.append("Frontend UI build synchronized to root build/ directory.")
+    except Exception as sync_e:
+        logs.append(f"Build sync: {str(sync_e)}")
+
     # Step 2: Database Migration Upgrade
     try:
         mig_res = subprocess.run([sys.executable, "-m", "flask", "db", "upgrade"], cwd=repo_dir, capture_output=True, text=True, timeout=30)
