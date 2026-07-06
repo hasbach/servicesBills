@@ -1,4 +1,6 @@
 import os
+import re
+import time
 import requests
 import traceback
 from flask import Flask, jsonify, request
@@ -2352,6 +2354,10 @@ def get_meta_templates():
                     data = resp.json().get('data', [])
                     for t in data:
                         if t.get('status') == 'APPROVED':
+                            if settings.business_account_id:
+                                _template_def_cache[(settings.business_account_id, t.get('name'))] = (time.time(), t)
+                            if settings.phone_number_id:
+                                _template_def_cache[(settings.phone_number_id, t.get('name'))] = (time.time(), t)
                             meta_templates.append({
                                 'name': t.get('name'),
                                 'language': t.get('language', 'en'),
@@ -2553,6 +2559,149 @@ def apply_system_update():
 
 
 
+_template_def_cache = {}
+
+def get_meta_template_definition(settings, template_name):
+    """
+    Retrieves template definition from Meta Business Manager (or in-memory cache).
+    Returns dict like {'name': '...', 'language': '...', 'components': [...]} or None.
+    """
+    if not settings or not settings.access_token:
+        return None
+    
+    account_id = settings.business_account_id or settings.phone_number_id
+    if not account_id:
+        return None
+
+    cache_key = (account_id, template_name)
+    now = time.time()
+    if cache_key in _template_def_cache:
+        ts, tmpl_def = _template_def_cache[cache_key]
+        if now - ts < 600:  # 10 min cache
+            return tmpl_def
+
+    try:
+        api_version = settings.api_version or 'v19.0'
+        url = f'https://graph.facebook.com/{api_version}/{account_id}/message_templates?name={template_name}'
+        headers = {'Authorization': f'Bearer {settings.access_token}'}
+        resp = requests.get(url, headers=headers, timeout=5)
+        if resp.ok:
+            data = resp.json().get('data', [])
+            for t in data:
+                if t.get('name') == template_name and t.get('status') == 'APPROVED':
+                    _template_def_cache[cache_key] = (now, t)
+                    return t
+            if data:
+                _template_def_cache[cache_key] = (now, data[0])
+                return data[0]
+    except Exception as e:
+        logging.warning(f"Could not fetch template def for {template_name}: {e}")
+    
+    return None
+
+def build_meta_template_payload(settings, template_name, default_language='en', user_body_params=None, user_header_params=None):
+    """
+    Intelligently builds components and template dict matching Meta's exact template definition
+    to prevent Error 132012 (Parameter format does not match format in the created template).
+    """
+    if user_body_params is None:
+        user_body_params = []
+    if isinstance(user_body_params, (str, int, float)):
+        user_body_params = [str(user_body_params)]
+    elif not isinstance(user_body_params, list):
+        user_body_params = list(user_body_params)
+
+    tmpl_def = get_meta_template_definition(settings, template_name)
+    
+    lang_code = default_language or 'en'
+    if tmpl_def and tmpl_def.get('language'):
+        lang_code = tmpl_def.get('language')
+
+    components = []
+
+    if tmpl_def and tmpl_def.get('components'):
+        # 1. HEADER Component
+        header_comp = next((c for c in tmpl_def.get('components', []) if c.get('type', '').upper() == 'HEADER'), None)
+        if header_comp:
+            fmt = header_comp.get('format', '').upper()
+            if fmt in ('IMAGE', 'VIDEO', 'DOCUMENT'):
+                media_url = None
+                if user_header_params and isinstance(user_header_params, (str, dict)):
+                    media_url = user_header_params if isinstance(user_header_params, str) else user_header_params.get('link')
+                elif isinstance(user_header_params, list) and user_header_params:
+                    media_url = user_header_params[0]
+                
+                if not media_url:
+                    ex = header_comp.get('example', {})
+                    if isinstance(ex, dict):
+                        handles = ex.get('header_handle') or ex.get('header_url') or []
+                        if handles and isinstance(handles, list) and len(handles) > 0:
+                            media_url = handles[0]
+                
+                if not media_url:
+                    media_url = "https://images.unsplash.com/photo-1557804506-669a67965ba0?auto=format&fit=crop&w=800&q=80"
+                
+                if fmt == 'IMAGE':
+                    components.append({'type': 'header', 'parameters': [{'type': 'image', 'image': {'link': str(media_url)}}]})
+                elif fmt == 'VIDEO':
+                    components.append({'type': 'header', 'parameters': [{'type': 'video', 'video': {'link': str(media_url)}}]})
+                elif fmt == 'DOCUMENT':
+                    components.append({'type': 'header', 'parameters': [{'type': 'document', 'document': {'link': str(media_url), 'filename': 'document.pdf'}}]})
+            elif fmt == 'TEXT':
+                header_text = header_comp.get('text', '')
+                matches = re.findall(r'\{\{(\d+)\}\}', header_text)
+                if matches:
+                    val = user_header_params if isinstance(user_header_params, str) else (user_header_params[0] if isinstance(user_header_params, list) and user_header_params else "Notification")
+                    components.append({'type': 'header', 'parameters': [{'type': 'text', 'text': str(val)}]})
+
+        # 2. BODY Component
+        body_comp = next((c for c in tmpl_def.get('components', []) if c.get('type', '').upper() == 'BODY'), None)
+        if body_comp and body_comp.get('text'):
+            matches = re.findall(r'\{\{(\d+)\}\}', body_comp['text'])
+            expected_count = max([int(m) for m in matches]) if matches else 0
+            
+            if expected_count > 0:
+                params_to_send = list(user_body_params)
+                while len(params_to_send) < expected_count:
+                    fallback_val = params_to_send[-1] if params_to_send else "-"
+                    params_to_send.append(fallback_val)
+                params_to_send = params_to_send[:expected_count]
+                
+                components.append({
+                    'type': 'body',
+                    'parameters': [{'type': 'text', 'text': str(val) if str(val).strip() else '-'} for val in params_to_send]
+                })
+            # If expected_count == 0, omit body component to prevent Error 132012
+
+        # 3. BUTTONS Component
+        buttons_comp = next((c for c in tmpl_def.get('components', []) if c.get('type', '').upper() == 'BUTTONS'), None)
+        if buttons_comp and buttons_comp.get('buttons'):
+            for idx, btn in enumerate(buttons_comp['buttons']):
+                if btn.get('type', '').upper() == 'URL' and '{{1}}' in btn.get('url', ''):
+                    url_param = str(user_body_params[0]).replace(' ', '-') if user_body_params else "offer"
+                    components.append({
+                        'type': 'button',
+                        'sub_type': 'url',
+                        'index': str(idx),
+                        'parameters': [{'type': 'text', 'text': url_param}]
+                    })
+    else:
+        if user_body_params:
+            components.append({
+                'type': 'body',
+                'parameters': [{'type': 'text', 'text': str(val)} for val in user_body_params if str(val).strip()]
+            })
+
+    template_dict = {
+        'name': template_name,
+        'language': {'code': lang_code},
+    }
+    if components:
+        template_dict['components'] = components
+    
+    return template_dict
+
+
 def send_whatsapp_message(customer, event_type, context=None):
     """
     Sends a WhatsApp message to a customer if the WhatsApp API mode is enabled.
@@ -2621,111 +2770,54 @@ def send_whatsapp_message(customer, event_type, context=None):
         }
 
         # Build template components (header / body parameters)
-        components = []
+        user_body_params = []
         if event_type == 'payment_paid':
             amount_str = f"{float(context.get('amount', 0)):.2f}"
             balance_str = f"{float(context.get('balance', customer.balance)):.2f}"
-            components = [{
-                'type': 'body',
-                'parameters': [
-                    {'type': 'text', 'text': customer.name},
-                    {'type': 'text', 'text': amount_str},
-                    {'type': 'text', 'text': balance_str},
-                ]
-            }]
+            user_body_params = [customer.name, amount_str, balance_str]
         elif event_type == 'subscription_renewed':
             expiry_date = str(context.get('expiry_date', ''))
             plan_name = str(context.get('plan_name', customer.subscription_plan.name if customer.subscription_plan else 'N/A'))
             balance_str = f"{float(context.get('balance', customer.balance)):.2f}"
-            components = [{
-                'type': 'body',
-                'parameters': [
-                    {'type': 'text', 'text': customer.name},
-                    {'type': 'text', 'text': plan_name},
-                    {'type': 'text', 'text': expiry_date},
-                    {'type': 'text', 'text': balance_str},
-                ]
-            }]
+            user_body_params = [customer.name, plan_name, expiry_date, balance_str]
         elif event_type == 'payment_reminder':
             balance_str = f"{float(context.get('balance', customer.balance)):.2f}"
             expiry_date = str(context.get('expiry_date', customer.subscription_expiry_date.strftime('%Y-%m-%d') if customer.subscription_expiry_date else 'N/A'))
-            components = [{
-                'type': 'body',
-                'parameters': [
-                    {'type': 'text', 'text': customer.name},
-                    {'type': 'text', 'text': balance_str},
-                    {'type': 'text', 'text': expiry_date},
-                ]
-            }]
+            user_body_params = [customer.name, balance_str, expiry_date]
         elif event_type == 'bulk_outage':
-            components = [{
-                'type': 'body',
-                'parameters': [
-                    {'type': 'text', 'text': context.get('message', 'an outage occured from the isp , will be repaired soon')}
-                ]
-            }]
+            user_body_params = [context.get('message', 'an outage occured from the isp , will be repaired soon')]
         elif event_type == 'bulk_maintenance':
-            components = [{
-                'type': 'body',
-                'parameters': [
-                    {'type': 'text', 'text': context.get('location', '')},
-                    {'type': 'text', 'text': context.get('estimated_time', '')}
-                ]
-            }]
+            user_body_params = [context.get('location', ''), context.get('estimated_time', '')]
         elif event_type == 'reseller_credit_added':
             amount_str = f"{float(context.get('amount', 0)):.2f}"
             balance_str = f"{float(context.get('balance', 0)):.2f}"
-            components = [{
-                'type': 'body',
-                'parameters': [
-                    {'type': 'text', 'text': amount_str},
-                    {'type': 'text', 'text': balance_str},
-                ]
-            }]
+            user_body_params = [amount_str, balance_str]
         elif event_type == 'reseller_discount_applied':
             amount_str = f"{float(context.get('amount', 0)):.2f}"
             balance_str = f"{float(context.get('balance', 0)):.2f}"
-            components = [{
-                'type': 'body',
-                'parameters': [
-                    {'type': 'text', 'text': amount_str},
-                    {'type': 'text', 'text': balance_str},
-                ]
-            }]
+            user_body_params = [amount_str, balance_str]
         elif event_type == 'reseller_customer_renewed':
             customer_name = context.get('customer_name', 'Unknown')
             balance_str = f"{float(context.get('balance', 0)):.2f}"
-            components = [{
-                'type': 'body',
-                'parameters': [
-                    {'type': 'text', 'text': customer_name},
-                    {'type': 'text', 'text': balance_str},
-                ]
-            }]
+            user_body_params = [customer_name, balance_str]
         elif event_type == 'reseller_payment_collected':
             amount_str = f"{float(context.get('amount', 0)):.2f}"
             balance_str = f"{float(context.get('balance', 0)):.2f}"
-            components = [{
-                'type': 'body',
-                'parameters': [
-                    {'type': 'text', 'text': amount_str},
-                    {'type': 'text', 'text': balance_str},
-                ]
-            }]
+            user_body_params = [amount_str, balance_str]
         elif event_type in ('bulk_feature', 'bulk_offer'):
-            components = [{
-                'type': 'body',
-                'parameters': [
-                    {'type': 'text', 'text': context.get('message', '')}
-                ]
-            }]
+            user_body_params = [context.get('message', '')]
+        else:
+            if context and isinstance(context.get('variables'), list):
+                user_body_params = context.get('variables')
+            elif context and context.get('message'):
+                user_body_params = [context.get('message')]
 
-        template_dict = {
-            'name': template_name,
-            'language': {'code': settings.template_language or 'en'},
-        }
-        if components:
-            template_dict['components'] = components
+        template_dict = build_meta_template_payload(
+            settings=settings,
+            template_name=template_name,
+            default_language=settings.template_language or 'en',
+            user_body_params=user_body_params
+        )
 
         payload = {
             'messaging_product': 'whatsapp',
@@ -3187,20 +3279,18 @@ def send_bulk_messages():
                         'Authorization': f'Bearer {settings.access_token}',
                         'Content-Type': 'application/json',
                     }
-                    components = []
+                    user_body_params = []
                     if custom_variables and isinstance(custom_variables, list):
-                        params = [{'type': 'text', 'text': str(var)} for var in custom_variables if str(var).strip()]
-                        if params:
-                            components = [{'type': 'body', 'parameters': params}]
+                        user_body_params = [str(var) for var in custom_variables if str(var).strip()]
                     elif data.get('variables', {}).get('message'):
-                        components = [{'type': 'body', 'parameters': [{'type': 'text', 'text': str(data['variables']['message'])}]}]
+                        user_body_params = [str(data['variables']['message'])]
 
-                    template_dict = {
-                        'name': custom_template,
-                        'language': {'code': template_language or 'en'},
-                    }
-                    if components:
-                        template_dict['components'] = components
+                    template_dict = build_meta_template_payload(
+                        settings=settings,
+                        template_name=custom_template,
+                        default_language=template_language or settings.template_language or 'en',
+                        user_body_params=user_body_params
+                    )
 
                     payload = {
                         'messaging_product': 'whatsapp',

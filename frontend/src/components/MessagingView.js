@@ -131,13 +131,14 @@ const MessagingView = () => {
                     return;
                 }
 
+                const selectedTmplObj = metaTemplates.find(t => t.name === selectedTemplate);
                 const varsList = customVariables ? customVariables.split(',').map(v => v.trim()).filter(Boolean) : [];
 
                 payload = {
                     audience: 'custom_list',
                     custom_phones: phoneList,
                     custom_template: selectedTemplate,
-                    template_language: 'en',
+                    template_language: selectedTmplObj ? selectedTmplObj.language : 'en',
                     custom_variables: varsList
                 };
             }
@@ -170,6 +171,11 @@ const MessagingView = () => {
     };
 
     const validPhoneCount = customPhonesText.split(/\r?\n|,/).map(p => p.trim()).filter(p => p.length >= 7).length;
+    const selectedTmplObj = metaTemplates.find(t => t.name === selectedTemplate);
+    const bodyComp = selectedTmplObj?.components?.find(c => c.type === 'BODY' || c.type === 'body');
+    const bodyText = bodyComp?.text || '';
+    const matches = bodyText.match(/\{\{\d+\}\}/g);
+    const varCount = matches ? new Set(matches).size : 0;
 
     return (
         <Box>
@@ -333,10 +339,16 @@ const MessagingView = () => {
                                     <TextField
                                         fullWidth
                                         label="Template Variables (Optional, comma-separated)"
-                                        placeholder="e.g. Summer Promo, 20% Discount"
+                                        placeholder={varCount > 0 ? `Enter ${varCount} value(s) e.g. Value 1${varCount > 1 ? ', Value 2' : ''}` : "e.g. Summer Promo, 20% Discount"}
                                         value={customVariables}
                                         onChange={(e) => setCustomVariables(e.target.value)}
-                                        helperText="Replaces placeholders {{1}}, {{2}} in your Meta template."
+                                        helperText={
+                                            selectedTmplObj && varCount === 0
+                                                ? "This Meta template has no variables (static text). Any variables entered here will be ignored automatically."
+                                                : selectedTmplObj && varCount > 0
+                                                ? `This template expects ${varCount} variable(s) ({{1}} to {{${varCount}}}). Enter comma-separated values.`
+                                                : "Replaces placeholders {{1}}, {{2}} in your Meta template."
+                                        }
                                     />
                                 </Grid>
 
