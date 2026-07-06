@@ -43,6 +43,8 @@ const DEFAULT_WA = {
     template_bulk_feature: 'feature_update',
     template_bulk_offer: 'special_offer',
     template_language: 'en',
+    forwarding_mobile: '',
+    webhook_verify_token: 'delta_net_whatsapp_secret',
     // eslint-disable-next-line no-template-curly-in-string
     deeplink_msg_payment: 'Dear {customer_name}, your payment of ${amount} has been received. Thank you!',
     // eslint-disable-next-line no-template-curly-in-string
@@ -429,6 +431,31 @@ const SettingsView = ({ businessSettings, setBusinessSettings, setSnackbar }) =>
                                         <Grid item xs={12} md={3}>
                                             <TextField fullWidth label="Offer Template" placeholder="special_offer" {...waField('template_bulk_offer')}
                                                 sx={{ '& .MuiOutlinedInput-root': { borderRadius: '12px' } }} />
+                                        </Grid>
+                                    </Grid>
+
+                                    <Divider sx={{ my: 3 }} />
+                                    <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 1, color: theme.palette.primary.main }}>
+                                        📩 Webhook & Incoming Reply Forwarding
+                                    </Typography>
+                                    <Alert severity="info" sx={{ mb: 2, borderRadius: '12px' }}>
+                                        When customers reply to your messages, Meta sends their replies to your webhook. Configure your business mobile number below to receive instant forwarded alerts on your phone!
+                                    </Alert>
+                                    <Grid container spacing={2}>
+                                        <Grid item xs={12} md={6}>
+                                            <TextField fullWidth label="Forwarding Mobile Number (Business/Personal)" placeholder="e.g. 201012345678 or 010..." {...waField('forwarding_mobile')}
+                                                helperText="Incoming customer replies will be forwarded to this WhatsApp number instantly"
+                                                sx={{ '& .MuiOutlinedInput-root': { borderRadius: '12px' } }} />
+                                        </Grid>
+                                        <Grid item xs={12} md={6}>
+                                            <TextField fullWidth label="Webhook Verify Token" placeholder="delta_net_whatsapp_secret" {...waField('webhook_verify_token')}
+                                                helperText="Use this exact secret token in Meta Developer Console when configuring your Webhook"
+                                                sx={{ '& .MuiOutlinedInput-root': { borderRadius: '12px' } }} />
+                                        </Grid>
+                                        <Grid item xs={12}>
+                                            <Alert severity="success" sx={{ borderRadius: '12px', bgcolor: '#f0fdf4', color: '#166534', border: '1px solid #bbf7d0' }}>
+                                                <strong>Your Webhook URL for Meta Console:</strong> <code>{window.location.origin}/api/whatsapp/webhook</code>
+                                            </Alert>
                                         </Grid>
                                     </Grid>
 

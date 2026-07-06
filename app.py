@@ -334,6 +334,8 @@ class WhatsAppSettings(db.Model):
         default='Dear {customer_name}, your payment of ${amount} has been received. Thank you!')
     deeplink_msg_renewal = db.Column(db.Text, nullable=True,
         default='Dear {customer_name}, your subscription has been renewed until {expiry_date}. Thank you!')
+    forwarding_mobile = db.Column(db.String(50), nullable=True)
+    webhook_verify_token = db.Column(db.String(100), nullable=True, default='delta_net_whatsapp_secret')
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -358,6 +360,9 @@ class WhatsAppSettings(db.Model):
             'template_bulk_offer': self.template_bulk_offer or 'special_offer',
             'template_language': self.template_language or 'en',
             'deeplink_msg_payment': self.deeplink_msg_payment or 'Dear {customer_name}, your payment of ${amount} has been received. Thank you!',
+            'deeplink_msg_renewal': self.deeplink_msg_renewal or 'Dear {customer_name}, your subscription has been renewed until {expiry_date}. Thank you!',
+            'forwarding_mobile': self.forwarding_mobile or '',
+            'webhook_verify_token': self.webhook_verify_token or 'delta_net_whatsapp_secret',
         }
 
 class SystemUpdateSettings(db.Model):
@@ -509,6 +514,14 @@ with app.app_context():
         db.session.execute(text("ALTER TABLE expense ADD COLUMN is_credit BOOLEAN DEFAULT 0"))
         db.session.commit()
     except Exception:
+        db.session.rollback()
+
+    try:
+        db.session.execute(text("ALTER TABLE whats_app_settings ADD COLUMN forwarding_mobile VARCHAR(50)"))
+        db.session.execute(text("ALTER TABLE whats_app_settings ADD COLUMN webhook_verify_token VARCHAR(100) DEFAULT 'delta_net_whatsapp_secret'"))
+        db.session.commit()
+        print("Migration: Successfully added forwarding_mobile and webhook_verify_token to whats_app_settings.")
+    except Exception as e:
         db.session.rollback()
 
     try:
@@ -2310,6 +2323,7 @@ def get_whatsapp_settings():
         'template_language': 'en',
         'deeplink_msg_payment': 'Dear {customer_name}, your payment of ${amount} has been received. Thank you!',
         'deeplink_msg_renewal': 'Dear {customer_name}, your subscription has been renewed until {expiry_date}. Thank you!',
+        'forwarding_mobile': '', 'webhook_verify_token': 'delta_net_whatsapp_secret',
     }}), 200
 
 @app.route('/api/whatsapp-settings', methods=['POST'])
@@ -2325,7 +2339,7 @@ def save_whatsapp_settings():
                   'app_secret','access_token','api_version','template_payment_paid',
                   'template_subscription_created', 'template_subscription_renewed','template_payment_reminder',
                   'template_bulk_outage', 'template_bulk_maintenance', 'template_bulk_feature', 'template_bulk_offer',
-                  'template_language','deeplink_msg_payment','deeplink_msg_renewal']
+                  'template_language','deeplink_msg_payment','deeplink_msg_renewal', 'forwarding_mobile', 'webhook_verify_token']
         for f in fields:
             if f in data:
                 setattr(settings, f, data[f])
@@ -3466,6 +3480,123 @@ def send_bulk_messages():
             'details': report_details
         }
     }), 200
+
+@app.route('/api/whatsapp/webhook', methods=['GET', 'POST'])
+def whatsapp_webhook():
+    settings = WhatsAppSettings.query.first()
+    verify_token = settings.webhook_verify_token if settings and settings.webhook_verify_token else 'delta_net_whatsapp_secret'
+
+    if request.method == 'GET':
+        mode = request.args.get('hub.mode')
+        token = request.args.get('hub.verify_token')
+        challenge = request.args.get('hub.challenge')
+        if mode == 'subscribe' and token == verify_token:
+            logging.info("WhatsApp Webhook verified successfully by Meta!")
+            return challenge, 200
+        return 'Verification failed', 403
+
+    if request.method == 'POST':
+        data = request.json or {}
+        try:
+            for entry in data.get('entry', []):
+                for change in entry.get('changes', []):
+                    val = change.get('value', {})
+                    messages = val.get('messages', [])
+                    contacts = val.get('contacts', [])
+                    
+                    for msg in messages:
+                        sender_phone = msg.get('from', '')
+                        msg_text = ''
+                        if msg.get('type') == 'text':
+                            msg_text = msg.get('text', {}).get('body', '')
+                        elif msg.get('type') == 'button':
+                            msg_text = msg.get('button', {}).get('text', '[Button Reply]')
+                        elif msg.get('type') == 'interactive':
+                            inter = msg.get('interactive', {})
+                            if inter.get('type') == 'button_reply':
+                                msg_text = inter.get('button_reply', {}).get('title', '[Interactive Button]')
+                            elif inter.get('type') == 'list_reply':
+                                msg_text = inter.get('list_reply', {}).get('title', '[List Reply]')
+                        else:
+                            msg_text = f"[{msg.get('type', 'Media/Attachment')} message received]"
+
+                        if not msg_text or not sender_phone:
+                            continue
+
+                        # Identify customer name
+                        cust_name = "Unknown Customer"
+                        if contacts and isinstance(contacts, list):
+                            cust_name = contacts[0].get('profile', {}).get('name', cust_name)
+                        
+                        cust_obj = Customer.query.filter(Customer.phone.like(f"%{sender_phone[-8:]}%")).first()
+                        if cust_obj:
+                            cust_name = cust_obj.name or cust_name
+
+                        logging.info(f"Incoming WhatsApp reply from {cust_name} (+{sender_phone}): {msg_text}")
+
+                        # 1. Forward message to business mobile if configured
+                        if settings and settings.forwarding_mobile and settings.access_token and settings.phone_number_id:
+                            fwd_phone = normalize_whatsapp_phone(settings.forwarding_mobile)
+                            if fwd_phone and fwd_phone != sender_phone:
+                                api_version = settings.api_version or 'v19.0'
+                                url = f'https://graph.facebook.com/{api_version}/{settings.phone_number_id}/messages'
+                                headers = {
+                                    'Authorization': f'Bearer {settings.access_token}',
+                                    'Content-Type': 'application/json',
+                                }
+                                fwd_text = f"🔔 *New Customer Reply*\n*From:* {cust_name} (+{sender_phone})\n*Message:* {msg_text}"
+                                payload_fwd = {
+                                    'messaging_product': 'whatsapp',
+                                    'to': fwd_phone,
+                                    'type': 'text',
+                                    'text': {'body': fwd_text}
+                                }
+                                res_fwd = requests.post(url, json=payload_fwd, headers=headers, timeout=10)
+                                if not res_fwd.ok:
+                                    logging.warning(f"Could not forward text reply to {fwd_phone} (may need 24h session open or template): {res_fwd.text}")
+                                    # Fallback: Try sending using an approved template if 24h window is closed
+                                    try:
+                                        tmpl_name = settings.template_bulk_outage or 'outage_alert'
+                                        payload_tmpl = {
+                                            'messaging_product': 'whatsapp',
+                                            'to': fwd_phone,
+                                            'type': 'template',
+                                            'template': {
+                                                'name': tmpl_name,
+                                                'language': {'code': settings.template_language or 'en'},
+                                                'components': [{'type': 'body', 'parameters': [{'type': 'text', 'text': f"Reply from +{sender_phone}: {msg_text[:60]}"}]}]
+                                            }
+                                        }
+                                        requests.post(url, json=payload_tmpl, headers=headers, timeout=10)
+                                    except Exception:
+                                        pass
+                                else:
+                                    logging.info(f"Successfully forwarded customer reply to business mobile (+{fwd_phone})!")
+
+                        # 2. Automatically log as a Support Ticket in Dashboard if customer found
+                        if cust_obj:
+                            try:
+                                ticket = SupportTicket(
+                                    customer_id=cust_obj.id,
+                                    title=f"WhatsApp Reply from {cust_name} (+{sender_phone})",
+                                    description=f"Incoming WhatsApp message:\n\n{msg_text}\n\n[Received via Meta Cloud API Webhook at {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC]",
+                                    status='open',
+                                    priority='medium',
+                                    created_at=datetime.utcnow(),
+                                    updated_at=datetime.utcnow()
+                                )
+                                db.session.add(ticket)
+                                db.session.commit()
+                                logging.info(f"Created support ticket #{ticket.id} for WhatsApp reply from {cust_name}.")
+                            except Exception as ex_t:
+                                db.session.rollback()
+                                logging.error(f"Failed to create support ticket for WhatsApp reply: {ex_t}")
+
+        except Exception as e:
+            logging.error(f"Error processing WhatsApp webhook: {e}")
+            traceback.print_exc()
+
+        return jsonify({'status': 'ok'}), 200
 
 @app.route('/api/reports/revenue', methods=['GET'])
 @jwt_required()
