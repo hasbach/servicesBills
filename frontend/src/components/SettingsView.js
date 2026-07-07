@@ -319,31 +319,29 @@ const SettingsView = ({ businessSettings, setBusinessSettings, setSnackbar }) =>
                                         sx={{ '& .MuiSwitch-switchBase.Mui-checked': { color: '#25D366' }, '& .MuiSwitch-switchBase.Mui-checked + .MuiSwitch-track': { bgcolor: '#25D366' } }} />
                                 </Box>
 
-                                <Collapse in={waForm.enabled}>
-                                    <Divider sx={{ my: 3 }} />
-                                    {/* Mode Toggle */}
-                                    <Box sx={{ mb: 3 }}>
-                                        <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 1.5 }}>Sending Mode</Typography>
-                                        <ToggleButtonGroup value={waForm.mode} exclusive onChange={(_, v) => v && setWaForm(f => ({ ...f, mode: v }))} sx={{ gap: 1 }}>
-                                            <ToggleButton value="deeplink" sx={{ borderRadius: '12px !important', textTransform: 'none', px: 2, py: 1, border: '1px solid !important', fontWeight: 600, '&.Mui-selected': { bgcolor: alpha('#25D366', 0.1), borderColor: '#25D366 !important', color: '#25D366' } }}>
-                                                <LinkIcon sx={{ mr: 1, fontSize: 18 }} /> Deep Link (Manual)
-                                            </ToggleButton>
-                                            <ToggleButton value="api" sx={{ borderRadius: '12px !important', textTransform: 'none', px: 2, py: 1, border: '1px solid !important', fontWeight: 600, '&.Mui-selected': { bgcolor: alpha(theme.palette.primary.main, 0.1), borderColor: `${theme.palette.primary.main} !important`, color: theme.palette.primary.main } }}>
-                                                <ApiIcon sx={{ mr: 1, fontSize: 18 }} /> Meta Cloud API (Auto)
-                                            </ToggleButton>
-                                        </ToggleButtonGroup>
+                                <Divider sx={{ my: 3 }} />
+                                {/* Mode Toggle */}
+                                <Box sx={{ mb: 1 }}>
+                                    <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 1.5 }}>Sending Mode</Typography>
+                                    <ToggleButtonGroup value={waForm.mode} exclusive onChange={(_, v) => v && setWaForm(f => ({ ...f, mode: v }))} sx={{ gap: 1 }}>
+                                        <ToggleButton value="deeplink" sx={{ borderRadius: '12px !important', textTransform: 'none', px: 2, py: 1, border: '1px solid !important', fontWeight: 600, '&.Mui-selected': { bgcolor: alpha('#25D366', 0.1), borderColor: '#25D366 !important', color: '#25D366' } }}>
+                                            <LinkIcon sx={{ mr: 1, fontSize: 18 }} /> Deep Link (Manual)
+                                        </ToggleButton>
+                                        <ToggleButton value="api" sx={{ borderRadius: '12px !important', textTransform: 'none', px: 2, py: 1, border: '1px solid !important', fontWeight: 600, '&.Mui-selected': { bgcolor: alpha(theme.palette.primary.main, 0.1), borderColor: `${theme.palette.primary.main} !important`, color: theme.palette.primary.main } }}>
+                                            <ApiIcon sx={{ mr: 1, fontSize: 18 }} /> Meta Cloud API (Auto)
+                                        </ToggleButton>
+                                    </ToggleButtonGroup>
 
-                                        <Alert severity="info" icon={<InfoIcon />} sx={{ mt: 2, borderRadius: '12px' }}>
-                                            {waForm.mode === 'deeplink'
-                                                ? '📱 A "Send via WhatsApp" button will appear on payment cards. Clicking it opens WhatsApp with a pre-filled message — the user taps Send.'
-                                                : '🤖 Messages are sent automatically via the Meta Cloud API when a payment is marked as paid or a subscription is renewed. Requires approved message templates.'}
-                                        </Alert>
-                                    </Box>
-                                </Collapse>
+                                    <Alert severity="info" icon={<InfoIcon />} sx={{ mt: 2, borderRadius: '12px' }}>
+                                        {waForm.mode === 'deeplink'
+                                            ? '📱 A "Send via WhatsApp" button will appear on payment cards. Clicking it opens WhatsApp with a pre-filled message — the user taps Send.'
+                                            : '🤖 Messages are sent automatically via the Meta Cloud API when a payment is marked as paid or a subscription is renewed. Requires approved message templates.'}
+                                    </Alert>
+                                </Box>
                             </Section>
 
                             {/* Deep Link Message Templates */}
-                            <Collapse in={waForm.enabled && waForm.mode === 'deeplink'}>
+                            <Collapse in={waForm.mode === 'deeplink'}>
                                 <Section icon={<MessageIcon />} title="Message Templates — Deep Link" subtitle="Use {customer_name}, {amount}, {expiry_date} as placeholders" color="#25D366">
                                     <Grid container spacing={2}>
                                         <Grid item xs={12}>
@@ -366,7 +364,7 @@ const SettingsView = ({ businessSettings, setBusinessSettings, setSnackbar }) =>
                             </Collapse>
 
                             {/* Meta API Settings */}
-                            <Collapse in={waForm.enabled && waForm.mode === 'api'}>
+                            <Collapse in={waForm.mode === 'api'}>
                                 <Section icon={<ApiIcon />} title="Meta Cloud API Credentials"
                                     subtitle="Get these from your Meta for Developers dashboard (developers.facebook.com)" color={theme.palette.primary.main}>
                                     <Alert severity="warning" sx={{ mb: 3, borderRadius: '12px' }}>
