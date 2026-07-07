@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
     Box, Typography, Paper, Button, TextField, CircularProgress,
-    Avatar, Grid, Divider, Switch, alpha, useTheme,
+    Avatar, Grid, Divider, Switch, alpha, useTheme, FormControlLabel,
     Alert, Collapse, InputAdornment, IconButton,
     ToggleButton, ToggleButtonGroup, Tab, Tabs
 } from '@mui/material';
@@ -45,6 +45,8 @@ const DEFAULT_WA = {
     template_language: 'en',
     forwarding_mobile: '',
     webhook_verify_token: 'delta_net_whatsapp_secret',
+    auto_reply_enabled: true,
+    auto_reply_message: "your message will be redirected to customer services team, they will respond in minutes, thank you.\n\nسيتم تحويل رسالتك الى قسم خدمة الزبائن, يقومون بالرد خلال دقائق, شكرا لكم",
     // eslint-disable-next-line no-template-curly-in-string
     deeplink_msg_payment: 'Dear {customer_name}, your payment of ${amount} has been received. Thank you!',
     // eslint-disable-next-line no-template-curly-in-string
@@ -475,6 +477,22 @@ const SettingsView = ({ businessSettings, setBusinessSettings, setSnackbar }) =>
                                                 sx={{ borderRadius: '12px', fontWeight: 600, textTransform: 'none' }}>
                                                 {linkingWaba ? 'Linking to Meta Account...' : '🔗 Force Link Webhook to Meta Account'}
                                             </Button>
+                                        </Grid>
+                                        <Grid item xs={12}>
+                                            <Divider sx={{ my: 2 }} />
+                                            <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 1, color: theme.palette.primary.main }}>
+                                                🤖 Automated Customer Acknowledgment (Bilingual)
+                                            </Typography>
+                                            <FormControlLabel
+                                                control={<Switch checked={Boolean(waForm.auto_reply_enabled)} onChange={(e) => setWaForm(f => ({ ...f, auto_reply_enabled: e.target.checked }))} color="primary" />}
+                                                label="Send instant auto-reply acknowledgment when a customer replies to your bot"
+                                                sx={{ mb: 1 }}
+                                            />
+                                            {waForm.auto_reply_enabled && (
+                                                <TextField fullWidth multiline rows={3} label="Auto-Reply Message" {...waField('auto_reply_message')}
+                                                    helperText="This message is sent instantly to the customer when they message or reply to your bot (debounced to once every 15 minutes per customer)"
+                                                    sx={{ '& .MuiOutlinedInput-root': { borderRadius: '12px' } }} />
+                                            )}
                                         </Grid>
                                     </Grid>
 

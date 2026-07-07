@@ -336,6 +336,9 @@ class WhatsAppSettings(db.Model):
         default='Dear {customer_name}, your subscription has been renewed until {expiry_date}. Thank you!')
     forwarding_mobile = db.Column(db.String(50), nullable=True)
     webhook_verify_token = db.Column(db.String(100), nullable=True, default='delta_net_whatsapp_secret')
+    auto_reply_enabled = db.Column(db.Boolean, default=True)
+    auto_reply_message = db.Column(db.Text, nullable=True,
+        default="your message will be redirected to customer services team, they will respond in minutes, thank you.\n\nسيتم تحويل رسالتك الى قسم خدمة الزبائن, يقومون بالرد خلال دقائق, شكرا لكم")
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -363,6 +366,8 @@ class WhatsAppSettings(db.Model):
             'deeplink_msg_renewal': self.deeplink_msg_renewal or 'Dear {customer_name}, your subscription has been renewed until {expiry_date}. Thank you!',
             'forwarding_mobile': self.forwarding_mobile or '',
             'webhook_verify_token': self.webhook_verify_token or 'delta_net_whatsapp_secret',
+            'auto_reply_enabled': True if self.auto_reply_enabled is None else self.auto_reply_enabled,
+            'auto_reply_message': self.auto_reply_message or "your message will be redirected to customer services team, they will respond in minutes, thank you.\n\nسيتم تحويل رسالتك الى قسم خدمة الزبائن, يقومون بالرد خلال دقائق, شكرا لكم",
         }
 
 class SystemUpdateSettings(db.Model):
@@ -519,8 +524,10 @@ with app.app_context():
     try:
         db.session.execute(text("ALTER TABLE whats_app_settings ADD COLUMN forwarding_mobile VARCHAR(50)"))
         db.session.execute(text("ALTER TABLE whats_app_settings ADD COLUMN webhook_verify_token VARCHAR(100) DEFAULT 'delta_net_whatsapp_secret'"))
+        db.session.execute(text("ALTER TABLE whats_app_settings ADD COLUMN auto_reply_enabled BOOLEAN DEFAULT 1"))
+        db.session.execute(text("ALTER TABLE whats_app_settings ADD COLUMN auto_reply_message TEXT"))
         db.session.commit()
-        print("Migration: Successfully added forwarding_mobile and webhook_verify_token to whats_app_settings.")
+        print("Migration: Successfully added forwarding_mobile, webhook_verify_token, and auto_reply fields to whats_app_settings.")
     except Exception as e:
         db.session.rollback()
 
@@ -2324,6 +2331,8 @@ def get_whatsapp_settings():
         'deeplink_msg_payment': 'Dear {customer_name}, your payment of ${amount} has been received. Thank you!',
         'deeplink_msg_renewal': 'Dear {customer_name}, your subscription has been renewed until {expiry_date}. Thank you!',
         'forwarding_mobile': '', 'webhook_verify_token': 'delta_net_whatsapp_secret',
+        'auto_reply_enabled': True,
+        'auto_reply_message': "your message will be redirected to customer services team, they will respond in minutes, thank you.\n\nسيتم تحويل رسالتك الى قسم خدمة الزبائن, يقومون بالرد خلال دقائق, شكرا لكم"
     }}), 200
 
 @app.route('/api/whatsapp-settings', methods=['POST'])
@@ -2339,7 +2348,7 @@ def save_whatsapp_settings():
                   'app_secret','access_token','api_version','template_payment_paid',
                   'template_subscription_created', 'template_subscription_renewed','template_payment_reminder',
                   'template_bulk_outage', 'template_bulk_maintenance', 'template_bulk_feature', 'template_bulk_offer',
-                  'template_language','deeplink_msg_payment','deeplink_msg_renewal', 'forwarding_mobile', 'webhook_verify_token']
+                  'template_language','deeplink_msg_payment','deeplink_msg_renewal', 'forwarding_mobile', 'webhook_verify_token', 'auto_reply_enabled', 'auto_reply_message']
         for f in fields:
             if f in data:
                 setattr(settings, f, data[f])
@@ -3659,6 +3668,43 @@ def whatsapp_webhook():
                             except Exception as ex_t:
                                 db.session.rollback()
                                 logging.error(f"Failed to create support ticket for WhatsApp reply: {ex_t}")
+
+                        # 3. Send automated acknowledgment reply back to the customer
+                        if settings and settings.access_token and settings.phone_number_id and getattr(settings, 'auto_reply_enabled', True):
+                            try:
+                                # Check if we already sent an auto-reply or created a ticket for this customer in the last 15 minutes
+                                recent_tickets_count = 0
+                                if cust_obj:
+                                    recent_tickets_count = SupportTicket.query.filter(
+                                        SupportTicket.customer_id == cust_obj.id,
+                                        SupportTicket.created_at >= datetime.utcnow() - timedelta(minutes=15)
+                                    ).count()
+                                
+                                # If recent_tickets_count <= 1 (meaning only the ticket we just created right now, or 0 if no customer object), send auto-reply
+                                if recent_tickets_count <= 1:
+                                    reply_text = getattr(settings, 'auto_reply_message', None) or (
+                                        "your message will be redirected to customer services team, they will respond in minutes, thank you.\n\n"
+                                        "سيتم تحويل رسالتك الى قسم خدمة الزبائن, يقومون بالرد خلال دقائق, شكرا لكم"
+                                    )
+                                    api_version = settings.api_version or 'v19.0'
+                                    url_reply = f'https://graph.facebook.com/{api_version}/{settings.phone_number_id}/messages'
+                                    headers_reply = {
+                                        'Authorization': f'Bearer {settings.access_token}',
+                                        'Content-Type': 'application/json',
+                                    }
+                                    payload_reply = {
+                                        'messaging_product': 'whatsapp',
+                                        'to': sender_phone,
+                                        'type': 'text',
+                                        'text': {'body': reply_text}
+                                    }
+                                    res_rep = requests.post(url_reply, json=payload_reply, headers=headers_reply, timeout=10)
+                                    if res_rep.ok:
+                                        logging.info(f"Sent automated acknowledgment reply to customer (+{sender_phone}).")
+                                    else:
+                                        logging.warning(f"Could not send auto-reply to customer (+{sender_phone}): {res_rep.text}")
+                            except Exception as ex_rep:
+                                logging.error(f"Error sending auto-reply to customer: {ex_rep}")
 
         except Exception as e:
             logging.error(f"Error processing WhatsApp webhook: {e}")
