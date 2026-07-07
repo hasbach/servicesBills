@@ -3534,19 +3534,43 @@ def whatsapp_webhook():
                     
                     for msg in messages:
                         sender_phone = msg.get('from', '')
+                        msg_type = msg.get('type', '')
                         msg_text = ''
-                        if msg.get('type') == 'text':
+                        media_payload = None
+                        
+                        if msg_type == 'text':
                             msg_text = msg.get('text', {}).get('body', '')
-                        elif msg.get('type') == 'button':
+                        elif msg_type == 'button':
                             msg_text = msg.get('button', {}).get('text', '[Button Reply]')
-                        elif msg.get('type') == 'interactive':
+                        elif msg_type == 'interactive':
                             inter = msg.get('interactive', {})
                             if inter.get('type') == 'button_reply':
                                 msg_text = inter.get('button_reply', {}).get('title', '[Interactive Button]')
                             elif inter.get('type') == 'list_reply':
                                 msg_text = inter.get('list_reply', {}).get('title', '[List Reply]')
+                        elif msg_type in ['audio', 'image', 'video', 'document', 'sticker', 'voice']:
+                            media_type = 'audio' if msg_type == 'voice' else msg_type
+                            media_obj = msg.get(msg_type, {})
+                            media_id = media_obj.get('id')
+                            caption = media_obj.get('caption', '')
+                            filename = media_obj.get('filename', '')
+                            
+                            if media_id:
+                                msg_text = f"[{msg_type.upper()} message received]" + (f": {caption}" if caption else "")
+                                if media_type == 'audio':
+                                    media_payload = {'type': 'audio', 'audio': {'id': media_id}}
+                                elif media_type == 'image':
+                                    media_payload = {'type': 'image', 'image': {'id': media_id, 'caption': f"From +{sender_phone}" + (f": {caption}" if caption else "")}}
+                                elif media_type == 'video':
+                                    media_payload = {'type': 'video', 'video': {'id': media_id, 'caption': f"From +{sender_phone}" + (f": {caption}" if caption else "")}}
+                                elif media_type == 'document':
+                                    media_payload = {'type': 'document', 'document': {'id': media_id, 'filename': filename or 'document.pdf', 'caption': f"From +{sender_phone}"}}
+                                elif media_type == 'sticker':
+                                    media_payload = {'type': 'sticker', 'sticker': {'id': media_id}}
+                            else:
+                                msg_text = f"[{msg_type.upper()} message received without media ID]"
                         else:
-                            msg_text = f"[{msg.get('type', 'Media/Attachment')} message received]"
+                            msg_text = f"[{msg_type} message received]"
 
                         if not msg_text or not sender_phone:
                             continue
@@ -3599,7 +3623,23 @@ def whatsapp_webhook():
                                     except Exception:
                                         pass
                                 else:
-                                    logging.info(f"Successfully forwarded customer reply to business mobile (+{fwd_phone})!")
+                                    logging.info(f"Successfully forwarded customer reply text to business mobile (+{fwd_phone})!")
+
+                                # If there is an audio/voice note or media payload, forward the actual media file immediately!
+                                if media_payload:
+                                    try:
+                                        payload_media_send = {
+                                            'messaging_product': 'whatsapp',
+                                            'to': fwd_phone,
+                                            **media_payload
+                                        }
+                                        res_media = requests.post(url, json=payload_media_send, headers=headers, timeout=15)
+                                        if res_media.ok:
+                                            logging.info(f"Successfully forwarded media ({media_payload.get('type')}) to business mobile (+{fwd_phone})!")
+                                        else:
+                                            logging.warning(f"Could not forward media directly: {res_media.text}")
+                                    except Exception as ex_med:
+                                        logging.error(f"Error forwarding media: {ex_med}")
 
                         # 2. Automatically log as a Support Ticket in Dashboard if customer found
                         if cust_obj:
