@@ -39,6 +39,7 @@ const DEFAULT_WA = {
     template_subscription_renewed: 'subscription_renewal',
     template_payment_reminder: 'payment_reminder',
     template_current_balance: 'current_balance',
+    template_forward_alert: 'customer_reply_alert',
     template_bulk_outage: 'outage_alert',
     template_bulk_maintenance: 'maintenance_alert',
     template_bulk_feature: 'feature_update',
@@ -435,6 +436,11 @@ const SettingsView = ({ businessSettings, setBusinessSettings, setSnackbar }) =>
                                         <Grid item xs={12} md={3}>
                                             <TextField fullWidth label="Current Balance Template" placeholder="current_balance" {...waField('template_current_balance')}
                                                 helperText="For balance & expiry reminders"
+                                                sx={{ '& .MuiOutlinedInput-root': { borderRadius: '12px' } }} />
+                                        </Grid>
+                                        <Grid item xs={12} md={3}>
+                                            <TextField fullWidth label="Forwarding Alert Template" placeholder="customer_reply_alert" {...waField('template_forward_alert')}
+                                                helperText="Fallback alert sent to you outside 24h window"
                                                 sx={{ '& .MuiOutlinedInput-root': { borderRadius: '12px' } }} />
                                         </Grid>
                                         <Grid item xs={12} md={3}>

@@ -324,6 +324,7 @@ class WhatsAppSettings(db.Model):
     template_subscription_renewed = db.Column(db.String(200), nullable=True, default='subscription_renewal')
     template_payment_reminder = db.Column(db.String(200), nullable=True, default='payment_reminder')
     template_current_balance = db.Column(db.String(200), nullable=True, default='current_balance')
+    template_forward_alert = db.Column(db.String(200), nullable=True, default='customer_reply_alert')
     template_bulk_outage = db.Column(db.String(200), nullable=True, default='outage_alert')
     template_bulk_maintenance = db.Column(db.String(200), nullable=True, default='maintenance_alert')
     template_bulk_feature = db.Column(db.String(200), nullable=True, default='feature_update')
@@ -359,6 +360,7 @@ class WhatsAppSettings(db.Model):
             'template_subscription_renewed': self.template_subscription_renewed or 'subscription_renewal',
             'template_payment_reminder': self.template_payment_reminder or 'payment_reminder',
             'template_current_balance': self.template_current_balance or 'current_balance',
+            'template_forward_alert': self.template_forward_alert or 'customer_reply_alert',
             'template_bulk_outage': self.template_bulk_outage or 'outage_alert',
             'template_bulk_maintenance': self.template_bulk_maintenance or 'maintenance_alert',
             'template_bulk_feature': self.template_bulk_feature or 'feature_update',
@@ -573,6 +575,12 @@ with app.app_context():
 
     try:
         db.session.execute(text("ALTER TABLE whats_app_settings ADD COLUMN template_current_balance VARCHAR(200) DEFAULT 'current_balance'"))
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+
+    try:
+        db.session.execute(text("ALTER TABLE whats_app_settings ADD COLUMN template_forward_alert VARCHAR(200) DEFAULT 'customer_reply_alert'"))
         db.session.commit()
     except Exception:
         db.session.rollback()
@@ -2364,6 +2372,7 @@ def get_whatsapp_settings():
         'template_subscription_renewed': 'subscription_renewal',
         'template_payment_reminder': 'payment_reminder',
         'template_current_balance': 'current_balance',
+        'template_forward_alert': 'customer_reply_alert',
         'template_bulk_outage': 'outage_alert',
         'template_bulk_maintenance': 'maintenance_alert',
         'template_bulk_feature': 'feature_update',
@@ -3681,7 +3690,7 @@ def whatsapp_webhook():
                                     logging.warning(f"Could not forward text reply to {fwd_phone} (may need 24h session open or template): {res_fwd.text}")
                                     # Fallback: Try sending using an approved template if 24h window is closed
                                     try:
-                                        tmpl_name = settings.template_bulk_outage or 'outage_alert'
+                                        tmpl_name = getattr(settings, 'template_forward_alert', None) or settings.template_bulk_outage or 'customer_reply_alert'
                                         payload_tmpl = {
                                             'messaging_product': 'whatsapp',
                                             'to': fwd_phone,
@@ -3689,12 +3698,19 @@ def whatsapp_webhook():
                                             'template': {
                                                 'name': tmpl_name,
                                                 'language': {'code': settings.template_language or 'en'},
-                                                'components': [{'type': 'body', 'parameters': [{'type': 'text', 'text': f"Reply from +{sender_phone}: {msg_text[:60]}"}]}]
+                                                'components': [{'type': 'body', 'parameters': [
+                                                    {'type': 'text', 'text': f"+{sender_phone}"},
+                                                    {'type': 'text', 'text': f"{msg_text[:60]}"}
+                                                ]}]
                                             }
                                         }
-                                        requests.post(url, json=payload_tmpl, headers=headers, timeout=10)
-                                    except Exception:
-                                        pass
+                                        res_tmpl = requests.post(url, json=payload_tmpl, headers=headers, timeout=10)
+                                        if not res_tmpl.ok:
+                                            # If 2 parameters failed, try 1 parameter format
+                                            payload_tmpl['template']['components'] = [{'type': 'body', 'parameters': [{'type': 'text', 'text': f"Reply from +{sender_phone}: {msg_text[:60]}"}]}]
+                                            requests.post(url, json=payload_tmpl, headers=headers, timeout=10)
+                                    except Exception as ex_tmpl:
+                                        logging.error(f"Fallback template forwarding failed: {ex_tmpl}")
                                 else:
                                     logging.info(f"Successfully forwarded customer reply text to business mobile (+{fwd_phone})!")
 
