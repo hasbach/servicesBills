@@ -3690,6 +3690,10 @@ def whatsapp_webhook():
                                     logging.warning(f"Could not forward text reply to {fwd_phone} (may need 24h session open or template): {res_fwd.text}")
                                     # Fallback: Try sending using an approved template if 24h window is closed
                                     try:
+                                        sender_info = f"{cust_name} (+{sender_phone})" if (cust_name and cust_name != "Unknown Customer") else f"+{sender_phone}"
+                                        name_param = cust_name if (cust_name and cust_name != "Unknown Customer") else "Customer"
+                                        
+                                        # First attempt: Try 3 parameters (1- Name, 2- Mobile Number, 3- Message)
                                         tmpl_name = getattr(settings, 'template_forward_alert', None) or settings.template_bulk_outage or 'customer_reply_alert'
                                         payload_tmpl = {
                                             'messaging_product': 'whatsapp',
@@ -3699,16 +3703,26 @@ def whatsapp_webhook():
                                                 'name': tmpl_name,
                                                 'language': {'code': settings.template_language or 'en'},
                                                 'components': [{'type': 'body', 'parameters': [
+                                                    {'type': 'text', 'text': f"{name_param}"},
                                                     {'type': 'text', 'text': f"+{sender_phone}"},
-                                                    {'type': 'text', 'text': f"{msg_text[:60]}"}
+                                                    {'type': 'text', 'text': f"{msg_text[:120]}"}
                                                 ]}]
                                             }
                                         }
                                         res_tmpl = requests.post(url, json=payload_tmpl, headers=headers, timeout=10)
                                         if not res_tmpl.ok:
-                                            # If 2 parameters failed, try 1 parameter format
-                                            payload_tmpl['template']['components'] = [{'type': 'body', 'parameters': [{'type': 'text', 'text': f"Reply from +{sender_phone}: {msg_text[:60]}"}]}]
-                                            requests.post(url, json=payload_tmpl, headers=headers, timeout=10)
+                                            # Second attempt: Try 2 parameters (1- Name & Mobile, 2- Message)
+                                            payload_tmpl['template']['components'] = [{'type': 'body', 'parameters': [
+                                                {'type': 'text', 'text': f"{sender_info}"},
+                                                {'type': 'text', 'text': f"{msg_text[:120]}"}
+                                            ]}]
+                                            res_tmpl2 = requests.post(url, json=payload_tmpl, headers=headers, timeout=10)
+                                            if not res_tmpl2.ok:
+                                                # Third attempt: Try 1 parameter format
+                                                payload_tmpl['template']['components'] = [{'type': 'body', 'parameters': [
+                                                    {'type': 'text', 'text': f"Reply from {sender_info}: {msg_text[:60]}"}
+                                                ]}]
+                                                requests.post(url, json=payload_tmpl, headers=headers, timeout=10)
                                     except Exception as ex_tmpl:
                                         logging.error(f"Fallback template forwarding failed: {ex_tmpl}")
                                 else:
